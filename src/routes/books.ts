@@ -65,4 +65,60 @@ router.post("/", async (req, res) => {
   }
 });
 
+// PATCH /books/:id
+// TEMPORARY: userEmail comes from the body. It will switch to the verified JWT user.
+router.patch("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid book id" });
+    }
+
+    const book = await books().findOne({ _id: new ObjectId(id) });
+    if (!book) return res.status(404).json({ message: "Book not found" });
+
+    const { userEmail, title, author, category, image, description, totalCopies } = req.body;
+    if (!userEmail || book.addedBy?.email !== userEmail) {
+      return res.status(403).json({ message: "You can only edit your own books" });
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (title !== undefined) updates.title = String(title).trim();
+    if (author !== undefined) updates.author = String(author).trim();
+    if (category !== undefined) updates.category = category;
+    if (image !== undefined) updates.image = image;
+    if (description !== undefined) updates.description = String(description).trim();
+
+    // If total copies change, available copies move by the same amount.
+    let availableChange = 0;
+    if (totalCopies !== undefined) {
+      const newTotal = Number(totalCopies);
+      if (!Number.isInteger(newTotal) || newTotal < 1) {
+        return res.status(400).json({ message: "Total copies must be at least 1" });
+      }
+      const borrowedNow = book.totalCopies - book.availableCopies;
+      if (newTotal < borrowedNow) {
+        return res.status(400).json({
+          message: `${borrowedNow} copies are borrowed right now, so total cannot be lower than that`,
+        });
+      }
+      updates.totalCopies = newTotal;
+      availableChange = newTotal - book.totalCopies;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "Nothing to update" });
+    }
+
+    const update: Record<string, unknown> = { $set: updates };
+    if (availableChange !== 0) update.$inc = { availableCopies: availableChange };
+
+    await books().updateOne({ _id: new ObjectId(id) }, update);
+    const updated = await books().findOne({ _id: new ObjectId(id) });
+    res.json(updated);
+  } catch {
+    res.status(500).json({ message: "Could not update the book" });
+  }
+});
+
 export default router;
