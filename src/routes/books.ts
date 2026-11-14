@@ -121,4 +121,28 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
+// DELETE /books/:id
+// TEMPORARY: userEmail comes from the query. It will switch to the verified JWT user.
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid book id" });
+    }
+
+    const book = await books().findOne({ _id: new ObjectId(id) });
+    if (!book) return res.status(404).json({ message: "Book not found" });
+
+    const userEmail = String(req.query.userEmail || "");
+    if (!userEmail || book.addedBy?.email !== userEmail) {
+      return res.status(403).json({ message: "You can only delete your own books" });
+    }
+
+    await books().deleteOne({ _id: new ObjectId(id) });
+    res.json({ message: "Book deleted", _id: id });
+  } catch {
+    res.status(500).json({ message: "Could not delete the book" });
+  }
+});
+
 export default router;
