@@ -9,6 +9,9 @@ export async function connectDB(): Promise<void> {
   const client = new MongoClient(uri);
   await client.connect();
   db = client.db("booknook");
+    await db
+    .collection("borrows")
+    .createIndex({ bookId: 1, userEmail: 1 }, { unique: true });
   console.log("Connected to MongoDB");
 }
 

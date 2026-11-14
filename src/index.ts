@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import { connectDB } from "./db.js";
 import booksRouter from "./routes/books.js";
+import borrowsRouter from "./routes/borrows.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -14,6 +15,7 @@ app.get("/", (_req, res) => {
   res.json({ message: "BookNook server is running" });
 });
 app.use("/books", booksRouter);
+app.use("/borrows", borrowsRouter);
 
 connectDB()
   .then(() => {
