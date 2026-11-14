@@ -163,4 +163,31 @@ router.get("/", async (req, res) => {
   }
 });
 
+// DELETE /borrows/:id  (return a book)
+// TEMPORARY: userEmail comes from the query. It will switch to the verified JWT user.
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid borrow id" });
+    }
+
+    const borrow = await borrows().findOne({ _id: new ObjectId(id) });
+    if (!borrow) return res.status(404).json({ message: "Borrow record not found" });
+
+    const userEmail = String(req.query.userEmail || "");
+    if (!userEmail || borrow.userEmail !== userEmail) {
+      return res.status(403).json({ message: "You can only return your own borrowed books" });
+    }
+
+    await borrows().deleteOne({ _id: borrow._id });
+    // Put the copy back (does nothing if the book was deleted meanwhile)
+    await books().updateOne({ _id: borrow.bookId }, { $inc: { availableCopies: 1 } });
+
+    res.json({ message: "Book returned", _id: id });
+  } catch {
+    res.status(500).json({ message: "Could not return the book" });
+  }
+});
+
 export default router;
