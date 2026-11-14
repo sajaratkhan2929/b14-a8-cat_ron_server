@@ -145,4 +145,22 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// GET /borrows?userEmail=...
+// TEMPORARY: userEmail comes from the query. It will switch to the verified JWT user.
+router.get("/", async (req, res) => {
+  try {
+    const userEmail = String(req.query.userEmail || "");
+    if (!userEmail) {
+      return res.status(400).json({ message: "User email is required" });
+    }
+    const list = await borrows()
+      .find({ userEmail })
+      .sort({ borrowDate: -1 })
+      .toArray();
+    res.json(list);
+  } catch {
+    res.status(500).json({ message: "Could not load your borrows" });
+  }
+});
+
 export default router;
