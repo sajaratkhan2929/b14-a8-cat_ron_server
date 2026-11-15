@@ -1,15 +1,24 @@
 import { Router } from "express";
 import { ObjectId } from "mongodb";
 import { getDb } from "../db.js";
+import { verifyToken } from "../middleware/verifyToken.js";
 
 const router = Router();
 const books = () => getDb().collection("books");
 
-// GET /books (public), newest first, optional ?limit=6
+const CATEGORIES = ["Fiction", "Science", "History", "Kids", "Others"];
+
+// GET /books (public). Newest first.
+// Optional: ?limit=6 and ?addedBy=email (used by My Books)
 router.get("/", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 0, 100);
-    let cursor = books().find().sort({ createdAt: -1 });
+    const filter: Record<string, unknown> = {};
+    if (typeof req.query.addedBy === "string" && req.query.addedBy) {
+      filter["addedBy.email"] = req.query.addedBy;
+    }
+
+    let cursor = books().find(filter).sort({ createdAt: -1 });
     if (limit > 0) cursor = cursor.limit(limit);
     res.json(await cursor.toArray());
   } catch {
@@ -32,15 +41,18 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// POST /books
-// TEMPORARY: addedBy comes from the body. It will switch to the verified JWT user.
-router.post("/", async (req, res) => {
+// POST /books (protected). addedBy comes from the verified token.
+router.post("/", verifyToken, async (req, res) => {
   try {
-    const { title, author, category, image, description, totalCopies, addedBy } = req.body;
+    const user = req.user!;
+    const { title, author, category, image, description, totalCopies } = req.body;
 
     const copies = Number(totalCopies);
-    if (!title || !author || !category || !image || !description || !addedBy?.email) {
+    if (!title || !author || !category || !image || !description) {
       return res.status(400).json({ message: "Please fill in all the fields" });
+    }
+    if (!CATEGORIES.includes(category)) {
+      return res.status(400).json({ message: "Please choose a valid category" });
     }
     if (!Number.isInteger(copies) || copies < 1) {
       return res.status(400).json({ message: "Total copies must be at least 1" });
@@ -54,7 +66,7 @@ router.post("/", async (req, res) => {
       description: String(description).trim(),
       totalCopies: copies,
       availableCopies: copies,
-      addedBy: { name: addedBy.name, email: addedBy.email },
+      addedBy: { name: user.name, email: user.email },
       createdAt: new Date(),
     };
 
@@ -65,10 +77,10 @@ router.post("/", async (req, res) => {
   }
 });
 
-// PATCH /books/:id
-// TEMPORARY: userEmail comes from the body. It will switch to the verified JWT user.
-router.patch("/:id", async (req, res) => {
+// PATCH /books/:id (protected, owner only)
+router.patch("/:id", verifyToken, async (req, res) => {
   try {
+    const user = req.user!;
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid book id" });
@@ -76,16 +88,20 @@ router.patch("/:id", async (req, res) => {
 
     const book = await books().findOne({ _id: new ObjectId(id) });
     if (!book) return res.status(404).json({ message: "Book not found" });
-
-    const { userEmail, title, author, category, image, description, totalCopies } = req.body;
-    if (!userEmail || book.addedBy?.email !== userEmail) {
+    if (book.addedBy?.email !== user.email) {
       return res.status(403).json({ message: "You can only edit your own books" });
     }
 
+    const { title, author, category, image, description, totalCopies } = req.body;
     const updates: Record<string, unknown> = {};
     if (title !== undefined) updates.title = String(title).trim();
     if (author !== undefined) updates.author = String(author).trim();
-    if (category !== undefined) updates.category = category;
+    if (category !== undefined) {
+      if (!CATEGORIES.includes(category)) {
+        return res.status(400).json({ message: "Please choose a valid category" });
+      }
+      updates.category = category;
+    }
     if (image !== undefined) updates.image = image;
     if (description !== undefined) updates.description = String(description).trim();
 
@@ -99,7 +115,7 @@ router.patch("/:id", async (req, res) => {
       const borrowedNow = book.totalCopies - book.availableCopies;
       if (newTotal < borrowedNow) {
         return res.status(400).json({
-          message: `${borrowedNow} copies are borrowed right now, so total cannot be lower than that`,
+          message: `${borrowedNow} copies are borrowed right now, so the total cannot be lower than that`,
         });
       }
       updates.totalCopies = newTotal;
@@ -114,17 +130,16 @@ router.patch("/:id", async (req, res) => {
     if (availableChange !== 0) update.$inc = { availableCopies: availableChange };
 
     await books().updateOne({ _id: new ObjectId(id) }, update);
-    const updated = await books().findOne({ _id: new ObjectId(id) });
-    res.json(updated);
+    res.json(await books().findOne({ _id: new ObjectId(id) }));
   } catch {
     res.status(500).json({ message: "Could not update the book" });
   }
 });
 
-// DELETE /books/:id
-// TEMPORARY: userEmail comes from the query. It will switch to the verified JWT user.
-router.delete("/:id", async (req, res) => {
+// DELETE /books/:id (protected, owner only)
+router.delete("/:id", verifyToken, async (req, res) => {
   try {
+    const user = req.user!;
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid book id" });
@@ -132,9 +147,7 @@ router.delete("/:id", async (req, res) => {
 
     const book = await books().findOne({ _id: new ObjectId(id) });
     if (!book) return res.status(404).json({ message: "Book not found" });
-
-    const userEmail = String(req.query.userEmail || "");
-    if (!userEmail || book.addedBy?.email !== userEmail) {
+    if (book.addedBy?.email !== user.email) {
       return res.status(403).json({ message: "You can only delete your own books" });
     }
 
@@ -142,51 +155,6 @@ router.delete("/:id", async (req, res) => {
     res.json({ message: "Book deleted", _id: id });
   } catch {
     res.status(500).json({ message: "Could not delete the book" });
-  }
-});
-
-// GET /borrows?userEmail=...
-// TEMPORARY: userEmail comes from the query. It will switch to the verified JWT user.
-router.get("/", async (req, res) => {
-  try {
-    const userEmail = String(req.query.userEmail || "");
-    if (!userEmail) {
-      return res.status(400).json({ message: "User email is required" });
-    }
-    const list = await borrows()
-      .find({ userEmail })
-      .sort({ borrowDate: -1 })
-      .toArray();
-    res.json(list);
-  } catch {
-    res.status(500).json({ message: "Could not load your borrows" });
-  }
-});
-
-// DELETE /borrows/:id  (return a book)
-// TEMPORARY: userEmail comes from the query. It will switch to the verified JWT user.
-router.delete("/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid borrow id" });
-    }
-
-    const borrow = await borrows().findOne({ _id: new ObjectId(id) });
-    if (!borrow) return res.status(404).json({ message: "Borrow record not found" });
-
-    const userEmail = String(req.query.userEmail || "");
-    if (!userEmail || borrow.userEmail !== userEmail) {
-      return res.status(403).json({ message: "You can only return your own borrowed books" });
-    }
-
-    await borrows().deleteOne({ _id: borrow._id });
-    // Put the copy back (does nothing if the book was deleted meanwhile)
-    await books().updateOne({ _id: borrow.bookId }, { $inc: { availableCopies: 1 } });
-
-    res.json({ message: "Book returned", _id: id });
-  } catch {
-    res.status(500).json({ message: "Could not return the book" });
   }
 });
 
