@@ -14,14 +14,33 @@ app.use(express.json());
 app.get("/", (_req, res) => {
   res.json({ message: "BookNook server is running" });
 });
+
+if (process.env.VERCEL) {
+  app.use(async (_req, res, next) => {
+    try {
+      await connectDB();
+      next();
+    } catch (err) {
+      console.error("DB connection failed:", err);
+      res.status(500).json({ message: "Database connection failed" });
+    }
+  });
+}
+
 app.use("/books", booksRouter);
 app.use("/borrows", borrowsRouter);
 
-connectDB()
-  .then(() => {
-    app.listen(port, () => console.log(`BookNook server listening on ${port}`));
-  })
-  .catch((err) => {
-    console.error("Failed to start server:", err);
-    process.exit(1);
-  });
+if (!process.env.VERCEL) {
+  connectDB()
+    .then(() => {
+      app.listen(port, () =>
+        console.log(`BookNook server listening on ${port}`)
+      );
+    })
+    .catch((err) => {
+      console.error("Failed to start server:", err);
+      process.exit(1);
+    });
+}
+
+export default app;
